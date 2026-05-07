@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import sharp from "sharp";
 
+import { MAX_IMAGE_PIXELS } from "@/lib/image-analysis/constants";
 import type { GrayscaleImageData, ImageInput } from "@/lib/image-analysis/types";
 
 export async function normalizeImageInput(input: ImageInput): Promise<string | Buffer> {
@@ -30,7 +31,9 @@ export async function normalizeImageInput(input: ImageInput): Promise<string | B
 
 export async function loadGrayscaleImage(input: ImageInput): Promise<GrayscaleImageData> {
   const normalized = await normalizeImageInput(input);
-  const { data, info } = await sharp(normalized)
+  const { data, info } = await sharp(normalized, {
+    limitInputPixels: MAX_IMAGE_PIXELS,
+  })
     .rotate()
     .greyscale()
     .raw()

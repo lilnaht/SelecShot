@@ -115,11 +115,15 @@ function formatCsvValue(value: string | number | null): string {
     return "";
   }
 
-  const stringValue = String(value);
+  const stringValue = escapeSpreadsheetFormula(String(value));
 
   if (!/[",\n\r]/.test(stringValue)) {
     return stringValue;
   }
 
   return `"${stringValue.replace(/"/g, '""')}"`;
+}
+
+function escapeSpreadsheetFormula(value: string) {
+  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
 }

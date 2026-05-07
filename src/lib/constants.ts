@@ -12,6 +12,10 @@ export const ACCEPTED_IMAGE_TYPES = [
 
 export const ACCEPTED_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 
+export const MAX_FILES_PER_ANALYSIS = 100;
+export const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+export const MAX_TOTAL_UPLOAD_SIZE_BYTES = 500 * 1024 * 1024;
+
 export const STATUS_LABELS: Record<AnalysisStatus, string> = {
   pending: "Pendente",
   uploading: "Enviando",

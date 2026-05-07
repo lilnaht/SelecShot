@@ -15,9 +15,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ACCEPTED_IMAGE_EXTENSIONS, STORAGE_BUCKET } from "@/lib/constants";
+import {
+  ACCEPTED_IMAGE_EXTENSIONS,
+  MAX_FILES_PER_ANALYSIS,
+  MAX_TOTAL_UPLOAD_SIZE_BYTES,
+  STORAGE_BUCKET,
+} from "@/lib/constants";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { formatBytes, isAcceptedImage, sanitizeFileName } from "@/lib/upload";
+import { formatBytes, sanitizeFileName, validateImageFile } from "@/lib/upload";
 import { cn } from "@/lib/utils";
 
 type UploadState =
@@ -49,13 +54,40 @@ export function UploadDropzone() {
     }
 
     const incoming = Array.from(fileList);
-    const valid = incoming.filter(isAcceptedImage);
-    const invalid = incoming.filter((file) => !isAcceptedImage(file));
+    const valid: File[] = [];
+    const invalid: string[] = [];
+    let nextTotalSize = totalSize;
+
+    for (const file of incoming) {
+      const validationError = validateImageFile(file);
+
+      if (validationError) {
+        invalid.push(`${file.name} (${validationError})`);
+        continue;
+      }
+
+      if (files.length + valid.length >= MAX_FILES_PER_ANALYSIS) {
+        invalid.push(`${file.name} (limite de ${MAX_FILES_PER_ANALYSIS} arquivos)`);
+        continue;
+      }
+
+      if (nextTotalSize + file.size > MAX_TOTAL_UPLOAD_SIZE_BYTES) {
+        invalid.push(
+          `${file.name} (limite total de ${formatBytes(
+            MAX_TOTAL_UPLOAD_SIZE_BYTES
+          )})`
+        );
+        continue;
+      }
+
+      valid.push(file);
+      nextTotalSize += file.size;
+    }
 
     setFiles((current) => [...current, ...valid]);
-    setInvalidFiles(invalid.map((file) => file.name));
+    setInvalidFiles(invalid);
     setError(null);
-    setState(valid.length ? "selected" : "idle");
+    setState(valid.length || files.length ? "selected" : "idle");
   }
 
   function removeFile(index: number) {
@@ -67,6 +99,25 @@ export function UploadDropzone() {
 
     if (!files.length) {
       setError("Selecione pelo menos uma imagem para iniciar a análise.");
+      return;
+    }
+
+    if (files.length > MAX_FILES_PER_ANALYSIS) {
+      setError(`Envie no máximo ${MAX_FILES_PER_ANALYSIS} imagens por análise.`);
+      return;
+    }
+
+    if (totalSize > MAX_TOTAL_UPLOAD_SIZE_BYTES) {
+      setError(
+        `O lote deve ter no máximo ${formatBytes(MAX_TOTAL_UPLOAD_SIZE_BYTES)}.`
+      );
+      return;
+    }
+
+    const invalidFile = files.find((file) => validateImageFile(file));
+
+    if (invalidFile) {
+      setError(`${invalidFile.name} não é uma imagem aceita.`);
       return;
     }
 
@@ -105,7 +156,8 @@ export function UploadDropzone() {
       .single();
 
     if (analysisError || !analysis) {
-      setError(analysisError?.message ?? "Não foi possível criar a análise.");
+      console.error("Failed to create analysis", analysisError);
+      setError("Não foi possível criar a análise.");
       setState("error");
       return;
     }
@@ -125,19 +177,20 @@ export function UploadDropzone() {
         .upload(storagePath, file, {
           cacheControl: "3600",
           upsert: false,
-        });
+      });
 
       if (uploadError) {
+        console.error("Failed to upload image", uploadError);
         await supabase
           .from("analyses")
           .update({
             status: "failed",
-            error_message: uploadError.message,
+            error_message: "Falha no upload de uma imagem.",
           })
           .eq("id", analysis.id)
           .eq("user_id", user.id);
 
-        setError(uploadError.message);
+        setError("Falha no upload de uma imagem.");
         setState("error");
         return;
       }
@@ -155,7 +208,16 @@ export function UploadDropzone() {
     const { error: filesError } = await supabase.from("analysis_files").insert(rows);
 
     if (filesError) {
-      setError(filesError.message);
+      console.error("Failed to register analysis files", filesError);
+      await supabase
+        .from("analyses")
+        .update({
+          status: "failed",
+          error_message: "Falha ao registrar os arquivos da análise.",
+        })
+        .eq("id", analysis.id)
+        .eq("user_id", user.id);
+      setError("Falha ao registrar os arquivos da análise.");
       setState("error");
       return;
     }
@@ -176,11 +238,8 @@ export function UploadDropzone() {
     });
 
     if (!triggerResponse.ok) {
-      const data = (await triggerResponse.json().catch(() => null)) as {
-        error?: string;
-      } | null;
-
-      setError(data?.error ?? "Não foi possível processar a análise.");
+      await triggerResponse.json().catch(() => null);
+      setError("Não foi possível processar a análise.");
       setState("error");
       return;
     }
@@ -305,7 +364,11 @@ export function UploadDropzone() {
             <AlertCircle data-icon="inline-start" />
             <AlertTitle>Arquivos rejeitados</AlertTitle>
             <AlertDescription>
-              {invalidFiles.join(", ")} não são imagens aceitas.
+              {invalidFiles.slice(0, 5).join(", ")}
+              {invalidFiles.length > 5
+                ? ` e mais ${invalidFiles.length - 5} arquivo(s)`
+                : ""}{" "}
+              não foram aceitos.
             </AlertDescription>
           </Alert>
         )}

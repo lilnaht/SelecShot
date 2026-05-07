@@ -1,6 +1,7 @@
 import sharp from "sharp";
 
 import {
+  MAX_IMAGE_PIXELS,
   PREVIEW_JPEG_QUALITY,
   PREVIEW_MAX_WIDTH,
 } from "@/lib/image-analysis/constants";
@@ -10,7 +11,7 @@ import type { ImageInput } from "@/lib/image-analysis/types";
 export async function generatePreview(input: ImageInput): Promise<Buffer> {
   const normalized = await normalizeImageInput(input);
 
-  return sharp(normalized)
+  return sharp(normalized, { limitInputPixels: MAX_IMAGE_PIXELS })
     .rotate()
     .resize({
       width: PREVIEW_MAX_WIDTH,

@@ -1,5 +1,6 @@
 import { STORAGE_BUCKET } from "@/lib/constants";
 import { mockAnalyses, mockAnalysisDetail } from "@/lib/mock-data";
+import { isUuid } from "@/lib/security";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { Analysis, AnalysisDetail, AnalysisFile } from "@/lib/types";
 
@@ -29,8 +30,13 @@ export async function getAnalysisDetail(
   analysisId: string
 ): Promise<AnalysisDetail | null> {
   const supabase = await createSupabaseServerClient();
+  const isMockAnalysis = analysisId.startsWith("mock");
 
-  if (!supabase || analysisId.startsWith("mock")) {
+  if (!isMockAnalysis && !isUuid(analysisId)) {
+    return null;
+  }
+
+  if (!supabase || isMockAnalysis) {
     return withUser(mockAnalysisDetail, userId);
   }
 
@@ -104,4 +110,3 @@ function withUser(detail: AnalysisDetail, userId: string): AnalysisDetail {
     files: detail.files.map((file) => ({ ...file, user_id: userId })),
   };
 }
-

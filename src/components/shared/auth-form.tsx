@@ -22,6 +22,13 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  isValidEmail,
+  isValidPassword,
+  normalizeEmailInput,
+  sanitizeDisplayName,
+  sanitizeRedirectPath,
+} from "@/lib/security";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type AuthFormProps = {
@@ -31,7 +38,7 @@ type AuthFormProps = {
 export function AuthForm({ mode }: AuthFormProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const next = searchParams.get("next") ?? "/dashboard";
+  const next = sanitizeRedirectPath(searchParams.get("next"));
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
@@ -68,9 +75,27 @@ export function AuthForm({ mode }: AuthFormProps) {
     }
 
     const form = new FormData(event.currentTarget);
-    const email = String(form.get("email") ?? "");
+    const email = normalizeEmailInput(String(form.get("email") ?? ""));
     const password = String(form.get("password") ?? "");
-    const fullName = String(form.get("full_name") ?? "");
+    const fullName = sanitizeDisplayName(String(form.get("full_name") ?? ""));
+
+    if (!isValidEmail(email)) {
+      setError("Informe um e-mail válido.");
+      setIsPending(false);
+      return;
+    }
+
+    if (!isValidPassword(password)) {
+      setError("A senha deve ter entre 6 e 128 caracteres.");
+      setIsPending(false);
+      return;
+    }
+
+    if (isRegister && !fullName) {
+      setError("Informe seu nome.");
+      setIsPending(false);
+      return;
+    }
 
     if (isRegister) {
       const { data, error: signUpError } = await supabase.auth.signUp({
@@ -84,7 +109,8 @@ export function AuthForm({ mode }: AuthFormProps) {
       });
 
       if (signUpError) {
-        setError(signUpError.message);
+        console.error("Supabase sign up failed", signUpError);
+        setError("Não foi possível criar a conta com esses dados.");
         setIsPending(false);
         return;
       }
@@ -109,7 +135,8 @@ export function AuthForm({ mode }: AuthFormProps) {
       });
 
       if (signInError) {
-        setError(signInError.message);
+        console.error("Supabase sign in failed", signInError);
+        setError("E-mail ou senha inválidos.");
         setIsPending(false);
         return;
       }
@@ -136,6 +163,7 @@ export function AuthForm({ mode }: AuthFormProps) {
                   name="full_name"
                   autoComplete="name"
                   placeholder="Seu nome"
+                  maxLength={120}
                   required
                 />
               </Field>
@@ -149,6 +177,7 @@ export function AuthForm({ mode }: AuthFormProps) {
                 autoComplete="email"
                 placeholder="voce@email.com"
                 aria-invalid={Boolean(error)}
+                maxLength={254}
                 required
               />
             </Field>
@@ -161,6 +190,8 @@ export function AuthForm({ mode }: AuthFormProps) {
                 autoComplete={isRegister ? "new-password" : "current-password"}
                 placeholder="Mínimo de 6 caracteres"
                 aria-invalid={Boolean(error)}
+                minLength={6}
+                maxLength={128}
                 required
               />
               {isRegister && (
@@ -193,4 +224,3 @@ export function AuthForm({ mode }: AuthFormProps) {
     </Card>
   );
 }
-

@@ -25,6 +25,7 @@ export const LIMIAR_SUBEXPOSTA_RATIO = 0.45;
 
 export const PREVIEW_MAX_WIDTH = 600;
 export const PREVIEW_JPEG_QUALITY = 75;
+export const MAX_IMAGE_PIXELS = 50_000_000;
 
 export const SUPPORTED_IMAGE_MIME_TYPES = new Set([
   "image/jpeg",

@@ -11,6 +11,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { CATEGORY_LABELS } from "@/lib/constants";
 import { getAnalysisDetail } from "@/lib/analyses";
+import { isUuid, sanitizeRedirectPath } from "@/lib/security";
 import { getCurrentUser } from "@/lib/supabase/server";
 import type { ImageCategory } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -23,10 +24,17 @@ export default async function AnalysisDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const isValidAnalysisId = id.startsWith("mock") || isUuid(id);
+
+  if (!isValidAnalysisId) {
+    notFound();
+  }
+
   const user = await getCurrentUser();
 
   if (!user) {
-    redirect(`/login?next=/dashboard/analyses/${id}`);
+    const nextPath = sanitizeRedirectPath(`/dashboard/analyses/${id}`);
+    redirect(`/login?next=${encodeURIComponent(nextPath)}`);
   }
 
   const detail = await getAnalysisDetail(user.id, id);
@@ -103,7 +111,13 @@ export default async function AnalysisDetailPage({
 
       {analysis.status === "failed" && (
         <div className="flex flex-col gap-4">
-          <ErrorState description={analysis.error_message ?? undefined} />
+          <ErrorState
+            description={
+              analysis.error_message
+                ? "Não foi possível processar este lote. Tente novamente com imagens JPG, PNG ou WebP dentro dos limites."
+                : undefined
+            }
+          />
           <div>
             <Button variant="outline" disabled>
               <RotateCcw data-icon="inline-start" />

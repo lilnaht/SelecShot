@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { STORAGE_BUCKET } from "@/lib/constants";
+import { MAX_FILES_PER_ANALYSIS, STORAGE_BUCKET } from "@/lib/constants";
 import {
   IMAGE_ANALYSIS_CONCURRENCY,
   SUPPORTED_IMAGE_EXTENSIONS,
@@ -94,6 +94,17 @@ export async function processSupabaseAnalysis({
     }
 
     const files = await fetchAnalysisFiles(supabase, analysisId, userId);
+
+    if (!files.length) {
+      throw new PublicAnalysisError("Nenhuma imagem foi encontrada para processar.");
+    }
+
+    if (files.length > MAX_FILES_PER_ANALYSIS) {
+      throw new PublicAnalysisError(
+        `A análise excede o limite de ${MAX_FILES_PER_ANALYSIS} imagens.`
+      );
+    }
+
     const results = await mapWithConcurrency(files, concurrency, (file) =>
       processAnalysisFile(supabase, file)
     );
@@ -104,6 +115,13 @@ export async function processSupabaseAnalysis({
     const failedResults = results.filter(
       (result): result is FailedFileResult => result.status === "error"
     );
+
+    if (!successfulResults.length) {
+      throw new PublicAnalysisError(
+        "Nenhuma imagem válida foi encontrada para processar."
+      );
+    }
+
     const zipFiles: ZipImageFile[] = successfulResults.map((result) => ({
       category: result.analysis.category,
       originalFilename: result.filename,
@@ -141,7 +159,7 @@ export async function processSupabaseAnalysis({
       })),
     };
   } catch (error) {
-    await markFailed(supabase, analysisId, userId, toErrorMessage(error));
+    await markFailed(supabase, analysisId, userId, toPublicAnalysisError(error));
     throw error;
   }
 }
@@ -157,6 +175,10 @@ async function processAnalysisFile(
   try {
     if (!storagePath) {
       throw new Error("Arquivo sem caminho no Storage.");
+    }
+
+    if (!isExpectedOriginalStoragePath(storagePath, file.user_id, file.analysis_id)) {
+      throw new Error("Caminho de arquivo invalido para esta analise.");
     }
 
     if (!hasSupportedImageExtension(filename) && !hasSupportedImageExtension(storagePath)) {
@@ -468,6 +490,20 @@ function hasSupportedImageExtension(value: string): boolean {
   );
 }
 
+function isExpectedOriginalStoragePath(
+  storagePath: string,
+  userId: string,
+  analysisId: string
+): boolean {
+  const expectedPrefix = `uploads/${userId}/${analysisId}/originals/`;
+
+  return (
+    storagePath.startsWith(expectedPrefix) &&
+    !storagePath.includes("..") &&
+    !storagePath.includes("\\")
+  );
+}
+
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -475,3 +511,13 @@ function toErrorMessage(error: unknown): string {
 
   return String(error);
 }
+
+function toPublicAnalysisError(error: unknown): string {
+  if (error instanceof PublicAnalysisError) {
+    return error.message;
+  }
+
+  return "Não foi possível processar esta análise. Tente novamente com imagens JPG, PNG ou WebP dentro dos limites.";
+}
+
+class PublicAnalysisError extends Error {}
