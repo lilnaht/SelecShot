@@ -114,5 +114,10 @@ Para lotes grandes, observe o limite de duração e memória das Vercel Function
 
 ```bash
 npm run lint
+npm test
 npm run build
 ```
+
+## Checklist adicional de deploy
+
+Antes de publicar, aplique `supabase/schema.sql` no projeto Supabase e confirme que `src/lib/supabase/*`, `supabase/schema.sql` e `.env.example` estao no commit. O arquivo `docs/deploy-supabase.md` detalha as policies RLS, Storage e variaveis de ambiente.

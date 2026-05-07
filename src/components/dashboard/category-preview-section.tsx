@@ -1,18 +1,23 @@
 import { ImageOff } from "lucide-react";
+import Link from "next/link";
 
 import { AnalysisPreviewGrid } from "@/components/dashboard/analysis-preview-grid";
 import { EmptyState } from "@/components/shared/empty-state";
+import { buttonVariants } from "@/components/ui/button";
 import { CATEGORY_DESCRIPTIONS, CATEGORY_LABELS } from "@/lib/constants";
 import type { AnalysisFileWithUrl, ImageCategory } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 type CategoryPreviewSectionProps = {
   category: ImageCategory;
   files: AnalysisFileWithUrl[];
+  downloadHref?: string | null;
 };
 
 export function CategoryPreviewSection({
   category,
   files,
+  downloadHref,
 }: CategoryPreviewSectionProps) {
   return (
     <section className="flex flex-col gap-4 rounded-xl border border-white/10 bg-white/[0.025] p-4">
@@ -23,9 +28,17 @@ export function CategoryPreviewSection({
             {CATEGORY_DESCRIPTIONS[category]}
           </p>
         </div>
-        <span className="text-sm text-muted-foreground">
-          {files.length} fotos
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">{files.length} fotos</span>
+          {downloadHref && files.length > 0 && (
+            <Link
+              href={downloadHref}
+              className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+            >
+              Baixar categoria
+            </Link>
+          )}
+        </div>
       </div>
       {files.length ? (
         <AnalysisPreviewGrid files={files} category={category} />
@@ -39,4 +52,3 @@ export function CategoryPreviewSection({
     </section>
   );
 }
-

@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { logAuditEvent } from "@/lib/audit";
 import { MAX_FILES_PER_ANALYSIS, STORAGE_BUCKET } from "@/lib/constants";
 import {
   IMAGE_ANALYSIS_CONCURRENCY,
@@ -68,6 +69,7 @@ type ProcessSupabaseAnalysisOptions = {
   analysisId: string;
   userId: string;
   concurrency?: number;
+  retry?: boolean;
 };
 
 export async function processSupabaseAnalysis({
@@ -75,12 +77,24 @@ export async function processSupabaseAnalysis({
   analysisId,
   userId,
   concurrency = IMAGE_ANALYSIS_CONCURRENCY,
+  retry = false,
 }: ProcessSupabaseAnalysisOptions): Promise<ProcessSupabaseAnalysisResult> {
+  const startedAt = Date.now();
+
   try {
-    const claimed = await claimAnalysis(supabase, analysisId, userId);
+    const claimed = await claimAnalysis(supabase, analysisId, userId, retry);
 
     if (!claimed) {
       const current = await fetchAnalysis(supabase, analysisId, userId);
+      await logAuditEvent(supabase, {
+        userId,
+        analysisId,
+        eventType: "analysis.processing_skipped",
+        eventData: {
+          retry,
+          status: current?.status ?? null,
+        },
+      });
 
       return {
         status: "skipped",
@@ -92,6 +106,15 @@ export async function processSupabaseAnalysis({
         errors: [],
       };
     }
+
+    await logAuditEvent(supabase, {
+      userId,
+      analysisId,
+      eventType: retry
+        ? "analysis.processing_retry_started"
+        : "analysis.processing_started",
+      eventData: { retry },
+    });
 
     const files = await fetchAnalysisFiles(supabase, analysisId, userId);
 
@@ -141,8 +164,26 @@ export async function processSupabaseAnalysis({
       analysisId,
       userId,
       totalFiles: files.length,
+      processedFiles: successfulResults.length,
+      failedFiles: failedResults.length,
       counts: countCategories(successfulResults),
       zipPath,
+      zipSizeBytes: zipBuffer.byteLength,
+      durationMs: Date.now() - startedAt,
+    });
+
+    await logAuditEvent(supabase, {
+      userId,
+      analysisId,
+      eventType: "analysis.processing_completed",
+      eventData: {
+        retry,
+        total_files: files.length,
+        processed_files: successfulResults.length,
+        failed_files: failedResults.length,
+        zip_size_bytes: zipBuffer.byteLength,
+        duration_ms: Date.now() - startedAt,
+      },
     });
 
     return {
@@ -159,7 +200,24 @@ export async function processSupabaseAnalysis({
       })),
     };
   } catch (error) {
-    await markFailed(supabase, analysisId, userId, toPublicAnalysisError(error));
+    const publicMessage = toPublicAnalysisError(error);
+    await markFailed(
+      supabase,
+      analysisId,
+      userId,
+      publicMessage,
+      Date.now() - startedAt
+    );
+    await logAuditEvent(supabase, {
+      userId,
+      analysisId,
+      eventType: "analysis.processing_failed",
+      eventData: {
+        retry,
+        error: publicMessage,
+        duration_ms: Date.now() - startedAt,
+      },
+    });
     throw error;
   }
 }
@@ -212,7 +270,7 @@ async function processAnalysisFile(
     };
   } catch (error) {
     const message = toErrorMessage(error);
-    await updateFileAsInvalid(supabase, file);
+    await updateFileAsInvalid(supabase, file, message);
 
     return {
       status: "error",
@@ -234,18 +292,29 @@ async function processAnalysisFile(
 async function claimAnalysis(
   supabase: SupabaseClient,
   analysisId: string,
-  userId: string
+  userId: string,
+  retry: boolean
 ): Promise<boolean> {
   const { data, error } = await supabase
     .from("analyses")
     .update({
       status: "processing",
       error_message: null,
+      processed_files: 0,
+      failed_files: 0,
+      dark_count: 0,
+      bright_count: 0,
+      blurred_count: 0,
+      good_count: 0,
+      zip_path: null,
+      zip_size_bytes: null,
+      processing_started_at: new Date().toISOString(),
       finished_at: null,
+      processing_duration_ms: null,
     })
     .eq("id", analysisId)
     .eq("user_id", userId)
-    .in("status", ["pending", "uploading"])
+    .in("status", retry ? ["failed"] : ["pending", "uploading"])
     .select("id")
     .maybeSingle();
 
@@ -307,6 +376,7 @@ async function updateFileAsProcessed(
       brightness_score: analysis.brightnessMean,
       blur_score: analysis.blurScore,
       preview_path: previewPath,
+      processing_error: null,
     })
     .eq("id", file.id)
     .eq("user_id", file.user_id);
@@ -318,7 +388,8 @@ async function updateFileAsProcessed(
 
 async function updateFileAsInvalid(
   supabase: SupabaseClient,
-  file: AnalysisFileRow
+  file: AnalysisFileRow,
+  errorMessage: string
 ): Promise<void> {
   const { error } = await supabase
     .from("analysis_files")
@@ -327,6 +398,7 @@ async function updateFileAsInvalid(
       brightness_score: null,
       blur_score: null,
       preview_path: null,
+      processing_error: errorMessage.slice(0, 500),
     })
     .eq("id", file.id)
     .eq("user_id", file.user_id);
@@ -341,28 +413,40 @@ async function markDone({
   analysisId,
   userId,
   totalFiles,
+  processedFiles,
+  failedFiles,
   counts,
   zipPath,
+  zipSizeBytes,
+  durationMs,
 }: {
   supabase: SupabaseClient;
   analysisId: string;
   userId: string;
   totalFiles: number;
+  processedFiles: number;
+  failedFiles: number;
   counts: Record<ImageCategory, number>;
   zipPath: string;
+  zipSizeBytes: number;
+  durationMs: number;
 }): Promise<void> {
   const { error } = await supabase
     .from("analyses")
     .update({
       status: "done",
       total_files: totalFiles,
+      processed_files: processedFiles,
+      failed_files: failedFiles,
       dark_count: counts.dark,
       bright_count: counts.bright,
       blurred_count: counts.blurred,
       good_count: counts.good,
       zip_path: zipPath,
+      zip_size_bytes: zipSizeBytes,
       error_message: null,
       finished_at: new Date().toISOString(),
+      processing_duration_ms: Math.max(0, Math.round(durationMs)),
     })
     .eq("id", analysisId)
     .eq("user_id", userId);
@@ -376,7 +460,8 @@ async function markFailed(
   supabase: SupabaseClient,
   analysisId: string,
   userId: string,
-  errorMessage: string
+  errorMessage: string,
+  durationMs: number
 ): Promise<void> {
   await supabase
     .from("analyses")
@@ -384,6 +469,7 @@ async function markFailed(
       status: "failed",
       error_message: errorMessage.slice(0, 1000),
       finished_at: new Date().toISOString(),
+      processing_duration_ms: Math.max(0, Math.round(durationMs)),
     })
     .eq("id", analysisId)
     .eq("user_id", userId);

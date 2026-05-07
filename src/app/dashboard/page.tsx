@@ -2,9 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { CalendarClock, FolderKanban, Image, Sparkles } from "lucide-react";
 
-import { AnalysisStatusBadge } from "@/components/dashboard/analysis-status-badge";
+import { AnalysisHistory } from "@/components/dashboard/analysis-history";
 import { AnalysisSummaryCard } from "@/components/dashboard/analysis-summary-card";
-import { EmptyState } from "@/components/shared/empty-state";
 import { buttonVariants } from "@/components/ui/button";
 import {
   Card,
@@ -13,16 +12,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { getAnalysesForUser, getDashboardStats } from "@/lib/analyses";
 import { getCurrentUser } from "@/lib/supabase/server";
+import type { Analysis } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export default async function DashboardPage() {
@@ -34,6 +26,7 @@ export default async function DashboardPage() {
 
   const analyses = await getAnalysesForUser(user.id);
   const stats = getDashboardStats(analyses);
+  const metrics = getDashboardMetrics(analyses);
 
   return (
     <div className="flex flex-col gap-6">
@@ -53,22 +46,31 @@ export default async function DashboardPage() {
       </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <AnalysisSummaryCard
-          title="Total de análises"
-          value={stats.totalAnalyses}
+          title="Análises no mês"
+          value={metrics.monthlyAnalyses}
+          description={metrics.monthlyAnalysesTrend}
           icon={FolderKanban}
         />
         <AnalysisSummaryCard
-          title="Fotos processadas no mês"
-          value={stats.monthlyFiles}
+          title="Fotos no mês"
+          value={metrics.monthlyFiles}
+          description={metrics.monthlyFilesTrend}
           icon={Image}
         />
-        <AnalysisSummaryCard title="Plano atual" value={stats.plan} icon={Sparkles} />
         <AnalysisSummaryCard
-          title="Última análise"
-          value={stats.lastAnalysis ? "Recente" : "Nenhuma"}
+          title="Descarte técnico"
+          value={metrics.discardRate}
+          description="Escuras, claras ou desfocadas"
+          icon={Sparkles}
+        />
+        <AnalysisSummaryCard
+          title="Tempo médio"
+          value={metrics.averageProcessingTime}
           description={
             stats.lastAnalysis
-              ? new Date(stats.lastAnalysis.created_at).toLocaleDateString("pt-BR")
+              ? `Último lote: ${new Date(
+                  stats.lastAnalysis.created_at
+                ).toLocaleDateString("pt-BR")}`
               : "Crie seu primeiro lote"
           }
           icon={CalendarClock}
@@ -78,60 +80,101 @@ export default async function DashboardPage() {
         <CardHeader>
           <CardTitle>Análises recentes</CardTitle>
           <CardDescription>
-            Dados reais do Supabase com amostras mockadas quando não há análises.
+            Filtre por status, período, volume de fotos ou ID do lote.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {analyses.length ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Lote</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Total</TableHead>
-                  <TableHead>Escuras</TableHead>
-                  <TableHead>Claras</TableHead>
-                  <TableHead>Desfocadas</TableHead>
-                  <TableHead>Boas</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {analyses.map((analysis) => (
-                  <TableRow key={analysis.id}>
-                    <TableCell>
-                      <Link
-                        href={`/dashboard/analyses/${analysis.id}`}
-                        className="font-medium text-foreground hover:text-sky-200"
-                      >
-                        {analysis.id.startsWith("mock")
-                          ? "Evento esportivo"
-                          : analysis.id.slice(0, 8)}
-                      </Link>
-                      <p className="text-xs text-muted-foreground">
-                        {new Date(analysis.created_at).toLocaleDateString("pt-BR")}
-                      </p>
-                    </TableCell>
-                    <TableCell>
-                      <AnalysisStatusBadge status={analysis.status} />
-                    </TableCell>
-                    <TableCell>{analysis.total_files}</TableCell>
-                    <TableCell>{analysis.dark_count}</TableCell>
-                    <TableCell>{analysis.bright_count}</TableCell>
-                    <TableCell>{analysis.blurred_count}</TableCell>
-                    <TableCell>{analysis.good_count}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          ) : (
-            <EmptyState
-              icon={FolderKanban}
-              title="Nenhuma análise ainda"
-              description="Envie suas fotos para criar o primeiro lote organizado."
-            />
-          )}
+          <AnalysisHistory analyses={analyses} referenceTime={metrics.referenceTime} />
         </CardContent>
       </Card>
     </div>
   );
+}
+
+function getDashboardMetrics(analyses: Analysis[]) {
+  const now = Date.now();
+  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+  const monthlyAnalyses = analyses.filter(
+    (analysis) => now - new Date(analysis.created_at).getTime() <= thirtyDays
+  );
+  const previousAnalyses = analyses.filter((analysis) => {
+    const age = now - new Date(analysis.created_at).getTime();
+    return age > thirtyDays && age <= thirtyDays * 2;
+  });
+  const monthlyFiles = sumFiles(monthlyAnalyses);
+  const previousMonthlyFiles = sumFiles(previousAnalyses);
+  const processedFiles = sumFiles(
+    analyses.filter((analysis) => analysis.status === "done")
+  );
+  const discardedFiles = analyses.reduce(
+    (total, analysis) =>
+      total + analysis.dark_count + analysis.bright_count + analysis.blurred_count,
+    0
+  );
+  const finishedDurations = analyses
+    .filter((analysis) => analysis.finished_at)
+    .map(
+      (analysis) =>
+        new Date(analysis.finished_at!).getTime() -
+        new Date(analysis.created_at).getTime()
+    )
+    .filter((duration) => duration >= 0);
+  const averageDuration =
+    finishedDurations.length > 0
+      ? finishedDurations.reduce((total, duration) => total + duration, 0) /
+        finishedDurations.length
+      : 0;
+
+  return {
+    referenceTime: now,
+    monthlyAnalyses: monthlyAnalyses.length,
+    monthlyAnalysesTrend: formatTrend(monthlyAnalyses.length, previousAnalyses.length),
+    monthlyFiles,
+    monthlyFilesTrend: formatTrend(monthlyFiles, previousMonthlyFiles),
+    discardRate: processedFiles
+      ? `${Math.round((discardedFiles / processedFiles) * 100)}%`
+      : "0%",
+    averageProcessingTime: averageDuration
+      ? formatProcessingTime(averageDuration)
+      : "Sem dados",
+  };
+}
+
+function sumFiles(analyses: Analysis[]) {
+  return analyses.reduce((total, analysis) => total + analysis.total_files, 0);
+}
+
+function formatTrend(current: number, previous: number) {
+  if (!previous && current) {
+    return "novo nos últimos 30 dias";
+  }
+
+  if (!previous) {
+    return "sem variação mensal";
+  }
+
+  const percentage = Math.round(((current - previous) / previous) * 100);
+
+  if (percentage === 0) {
+    return "sem variação mensal";
+  }
+
+  return `${percentage > 0 ? "+" : ""}${percentage}% vs. período anterior`;
+}
+
+function formatProcessingTime(durationMs: number) {
+  const minutes = Math.round(durationMs / 60000);
+
+  if (minutes < 1) {
+    return "<1 min";
+  }
+
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  return remainingMinutes ? `${hours}h ${remainingMinutes}min` : `${hours}h`;
 }

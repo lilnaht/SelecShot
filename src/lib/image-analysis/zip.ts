@@ -84,7 +84,7 @@ function sanitizeZipFilename(filename: string): string {
   return normalized || "imagem.jpg";
 }
 
-function buildReportCsv(rows: ZipReportRow[]): string {
+export function buildReportCsv(rows: ZipReportRow[]): string {
   const header = [
     "arquivo",
     "categoria",
